@@ -43,7 +43,7 @@
 </head>
 <body class="bg-neutral-warm text-slate-800 min-h-screen flex flex-col">
 
-    <!-- PANTALLA DE ACCESO / CONTRASEÑA -->
+    <!-- ==================== PANTALLA DE ACCESO / CONTRASEÑA ==================== -->
     <div id="pantalla-login" class="fixed inset-0 bg-slate-900 z-50 flex items-center justify-center p-4">
         <div class="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-center border border-slate-100 fade-in">
             <div class="w-20 h-20 bg-blue-50 text-scientific-blue rounded-full flex items-center justify-center mx-auto mb-5 text-3xl shadow-inner">
@@ -68,7 +68,7 @@
         </div>
     </div>
 
-    <!-- CONTENEDOR PRINCIPAL -->
+    <!-- ==================== CONTENEDOR PRINCIPAL ==================== -->
     <div id="contenedor-app" class="hidden flex-col min-h-screen">
         <header class="bg-scientific-blue text-white shadow-md py-4 px-6 flex justify-between items-center z-20 relative">
             <div class="flex items-center gap-3">
@@ -598,21 +598,14 @@
 
     <!-- ==================== CONTROL DE ACCESO ==================== -->
     <script>
-        // Clave por defecto: 'fisabiomola2026'
-        const HASH_CONTRASENA_CORRECTA = "d527c81d5540f8aa579df6f7d4cbcc1a9a5237fa406adaf57ac55b9090853da5";
+        // Contraseña directa para evitar discrepancias de cálculo en SHA-256
+        const CONTRASENA_CORRECTA = "fisabiomola2026";
 
-        async function sha256(cadena) {
-            const buffer = new TextEncoder().encode(cadena);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        }
+        function comprobarPassword() {
+            // .trim() elimina espacios invisibles al pegar o autocompletar
+            const passIntroducida = document.getElementById('inputPass').value.trim();
 
-        async function comprobarPassword() {
-            const passIntroducida = document.getElementById('inputPass').value;
-            const hashGenerado = await sha256(passIntroducida);
-
-            if (hashGenerado === HASH_CONTRASENA_CORRECTA) {
+            if (passIntroducida === CONTRASENA_CORRECTA) {
                 sessionStorage.setItem('foodtaxa_autenticado', 'true');
                 desbloquearInterfaz();
             } else {
@@ -628,7 +621,7 @@
             app.classList.remove('hidden');
             app.classList.add('flex');
             
-            // Iniciar carga automática de la BD nada más entrar
+            // Iniciar carga automática de la BD desde el repositorio
             initAutoLoadDB();
         }
 
@@ -649,7 +642,6 @@
     <!-- ==================== LÓGICA DE LA APLICACIÓN ==================== -->
     <script>
         // CONFIGURACIÓN DEL NOMBRE DEL ARCHIVO EN TU REPOSITORIO GITHUB
-        // Si tu archivo se llama diferente, cámbialo aquí:
         const REPO_DB_FILENAME = './mydb.db';
 
         let db = null;
@@ -670,7 +662,7 @@
 
         // --- CARGA AUTOMÁTICA DE LA BASE DE DATOS DESDE GITHUB (FETCH) ---
         async function initAutoLoadDB() {
-            if (db) return; // Evitar recargar si ya está lista
+            if (db) return;
             
             const msgEl = document.getElementById('db-load-message');
             const statusIcon = document.getElementById('db-status-icon');
@@ -693,7 +685,6 @@
 
                 db = new SQL.Database(new Uint8Array(arrayBuffer));
 
-                // Éxito: ocultar pantalla de carga y mostrar app
                 document.getElementById('db-upload-section').classList.add('hidden');
                 document.getElementById('main-app-section').classList.remove('hidden');
 

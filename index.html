@@ -43,7 +43,7 @@
 </head>
 <body class="bg-neutral-warm text-slate-800 min-h-screen flex flex-col">
 
-    <!-- ==================== PANTALLA DE ACCESO / BLOQUEO POR CONTRASEÑA ==================== -->
+    <!-- PANTALLA DE ACCESO / CONTRASEÑA -->
     <div id="pantalla-login" class="fixed inset-0 bg-slate-900 z-50 flex items-center justify-center p-4">
         <div class="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-center border border-slate-100 fade-in">
             <div class="w-20 h-20 bg-blue-50 text-scientific-blue rounded-full flex items-center justify-center mx-auto mb-5 text-3xl shadow-inner">
@@ -68,7 +68,7 @@
         </div>
     </div>
 
-    <!-- ==================== CONTENIDO DE LA APLICACIÓN ==================== -->
+    <!-- CONTENEDOR PRINCIPAL -->
     <div id="contenedor-app" class="hidden flex-col min-h-screen">
         <header class="bg-scientific-blue text-white shadow-md py-4 px-6 flex justify-between items-center z-20 relative">
             <div class="flex items-center gap-3">
@@ -77,38 +77,41 @@
             </div>
             <div class="flex items-center gap-3">
                 <div class="text-sm font-medium px-3 py-1 bg-blue-800 rounded-full border border-blue-700 shadow-inner flex items-center gap-2" id="db-status">
-                    <i class="fas fa-database text-red-400" id="db-status-icon"></i> 
-                    <span id="db-status-text">Database disconnected</span>
+                    <i class="fas fa-database text-amber-400" id="db-status-icon"></i> 
+                    <span id="db-status-text">Fetching database...</span>
                 </div>
-                <!-- Botón opcional para cerrar sesión -->
                 <button onclick="cerrarSesion()" title="Lock application" class="text-blue-200 hover:text-white ml-2 text-sm">
                     <i class="fas fa-sign-out-alt"></i>
                 </button>
             </div>
         </header>
 
+        <!-- SECCIÓN DE CARGA INICIAL (AUTOMÁTICA) -->
         <div id="db-upload-section" class="flex-grow flex flex-col items-center justify-center p-6 fade-in absolute inset-0 bg-neutral-warm z-10 pt-20">
             <div class="bg-white p-8 rounded-2xl shadow-xl max-w-lg w-full text-center border border-slate-100">
                 <div class="w-20 h-20 bg-blue-50 text-scientific-blue rounded-full flex items-center justify-center mx-auto mb-6 text-4xl">
-                    <i class="fas fa-file-export"></i>
+                    <i class="fas fa-cloud-download-alt"></i>
                 </div>
-                <h2 class="text-2xl font-bold mb-2">Load Database</h2>
-                <p class="text-slate-500 mb-8">Please, select your SQLite file (e.g. <strong>mydb.db</strong>) containing the schema.</p>
+                <h2 class="text-2xl font-bold mb-2">Connecting to FoodTaxa Database</h2>
+                <p id="db-load-message" class="text-slate-500 mb-6">Downloading database from repository and initializing WebAssembly engine...</p>
                 
-                <label class="cursor-pointer bg-scientific-blue hover:bg-scientific-light text-white font-semibold py-3 px-6 rounded-lg transition shadow-md inline-flex items-center gap-2">
-                    <i class="fas fa-folder-open"></i> Select .db file
-                    <input type="file" id="db-file-input" class="hidden" accept=".db,.sqlite,.sqlite3">
-                </label>
-                
-                <div id="loading-spinner" class="hidden flex-col items-center mt-6">
+                <div id="loading-spinner" class="flex flex-col items-center">
                     <div class="loader mb-3"></div>
-                    <p class="text-sm text-slate-600 font-medium">Processing database in memory...</p>
+                    <p class="text-xs text-slate-400 font-medium">Please wait a few seconds...</p>
+                </div>
+
+                <!-- Fallback manual por si falla la descarga o se desea cambiar el archivo -->
+                <div id="manual-fallback" class="hidden mt-6 pt-6 border-t border-slate-100">
+                    <p class="text-sm text-red-600 mb-4 font-semibold">Could not load the database automatically from the repository.</p>
+                    <label class="cursor-pointer bg-scientific-blue hover:bg-scientific-light text-white font-semibold py-2.5 px-5 rounded-lg transition shadow-md inline-flex items-center gap-2 text-sm">
+                        <i class="fas fa-folder-open"></i> Select local .db file
+                        <input type="file" id="db-file-input" class="hidden" accept=".db,.sqlite,.sqlite3">
+                    </label>
                 </div>
             </div>
         </div>
 
         <div id="main-app-section" class="hidden flex-grow flex flex-col fade-in">
-            
             <div class="bg-white border-b border-slate-200 shadow-sm px-6 flex gap-2 md:gap-6 overflow-x-auto">
                 <button onclick="showSection('food')" id="tab-food" class="py-4 px-3 font-semibold text-scientific-blue border-b-2 border-scientific-blue transition whitespace-nowrap">
                     <i class="fas fa-apple-whole mr-2"></i> Search by Food
@@ -343,7 +346,7 @@
                                 </div>
                             </h3>
                             <input type="text" oninput="filterSidebarOptions(this, 'dynamic-health_group-primary-container')" placeholder="Filter options..." 
-                               class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
                             <div id="health_group-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 text-slate-400">
                                 No active search.
                             </div>
@@ -593,10 +596,10 @@
         </div>
     </div>
 
-    <!-- ==================== LÓGICA DE CONTROL DE ACCESO ==================== -->
+    <!-- ==================== CONTROL DE ACCESO ==================== -->
     <script>
-        // SHA-256 de la contraseña 'Fisabioeslomejor2026'
-        const HASH_CONTRASENA_CORRECTA = "af2c3acd6a6aa995a46558bf43993e129c27bf350018fb84bf88a349cadf65cb";
+        // Clave por defecto: 'foodtaxa2024'
+        const HASH_CONTRASENA_CORRECTA = "8724d20914e67272ae40fb6aa46ff039be7fa1929dc330ff2dbcfb9cb0309990";
 
         async function sha256(cadena) {
             const buffer = new TextEncoder().encode(cadena);
@@ -624,6 +627,9 @@
             const app = document.getElementById('contenedor-app');
             app.classList.remove('hidden');
             app.classList.add('flex');
+            
+            // Iniciar carga automática de la BD nada más entrar
+            initAutoLoadDB();
         }
 
         function cerrarSesion() {
@@ -631,19 +637,21 @@
             location.reload();
         }
 
-        // Permitir pulsar Enter en el input de contraseña
         document.getElementById('inputPass').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') comprobarPassword();
         });
 
-        // Comprobar si el usuario ya inició sesión en la pestaña
         if (sessionStorage.getItem('foodtaxa_autenticado') === 'true') {
             desbloquearInterfaz();
         }
     </script>
 
-    <!-- ==================== LÓGICA DE LA APLICACIÓN ORIGINAL ==================== -->
+    <!-- ==================== LÓGICA DE LA APLICACIÓN ==================== -->
     <script>
+        // CONFIGURACIÓN DEL NOMBRE DEL ARCHIVO EN TU REPOSITORIO GITHUB
+        // Si tu archivo se llama diferente, cámbialo aquí:
+        const REPO_DB_FILENAME = './mydb.db';
+
         let db = null;
         let pyodide = null;
         let pyodideReady = false;
@@ -660,7 +668,51 @@
             paper: { column: null, direction: 'asc' }
         };
 
-        // --- SISTEMA DE PYODIDE PARA EJECUTAR TU SCRIPT PYTHON ---
+        // --- CARGA AUTOMÁTICA DE LA BASE DE DATOS DESDE GITHUB (FETCH) ---
+        async function initAutoLoadDB() {
+            if (db) return; // Evitar recargar si ya está lista
+            
+            const msgEl = document.getElementById('db-load-message');
+            const statusIcon = document.getElementById('db-status-icon');
+            const statusText = document.getElementById('db-status-text');
+
+            try {
+                msgEl.textContent = `Downloading ${REPO_DB_FILENAME} from repository...`;
+                const response = await fetch(REPO_DB_FILENAME);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status} - Could not find ${REPO_DB_FILENAME}`);
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+                
+                msgEl.textContent = "Initializing SQLite WebAssembly engine...";
+                const SQL = await initSqlJs({ 
+                    locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` 
+                });
+
+                db = new SQL.Database(new Uint8Array(arrayBuffer));
+
+                // Éxito: ocultar pantalla de carga y mostrar app
+                document.getElementById('db-upload-section').classList.add('hidden');
+                document.getElementById('main-app-section').classList.remove('hidden');
+
+                statusIcon.className = "fas fa-database text-emerald-400";
+                statusText.textContent = "Database connected";
+
+                loadStatistics();
+            } catch (err) {
+                console.warn("Fallo en la carga automática:", err);
+                msgEl.textContent = "Automatic fetch failed: " + err.message;
+                document.getElementById('loading-spinner').classList.add('hidden');
+                document.getElementById('manual-fallback').classList.remove('hidden');
+                
+                statusIcon.className = "fas fa-database text-red-400";
+                statusText.textContent = "Database disconnected";
+            }
+        }
+
+        // --- SISTEMA DE PYODIDE (PYTHON NETWORKX) ---
         async function ensurePyodideLoaded() {
             if (pyodideReady) return pyodide;
             
@@ -1100,7 +1152,7 @@ def generar_red_base64(tsv_content):
             }
         }
 
-        // --- DESPLEGAR MENÚ DE VALORES DESDE LAS TARJETAS ---
+        // --- DESPLEGAR MENÚ DE DETALLES ---
         function showStatDetails(categoryKey, menuTitle, sqlQuery, iconClass, isItalic) {
             if (!db) return;
             
@@ -1151,7 +1203,7 @@ def generar_red_base64(tsv_content):
             }
         }
 
-        // --- DATABASE LOADING ---
+        // --- CARGA MANUAL DESDE DISPOSITIVO (FALLBACK) ---
         document.getElementById('db-file-input').addEventListener('change', async function(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -1180,7 +1232,7 @@ def generar_red_base64(tsv_content):
             }
         });
 
-        // --- RENDERIZADO DE FILTROS LATERALES DINÁMICOS ---
+        // --- RENDERIZADO DE FILTROS LATERALES ---
         function renderSidebarFilters(containerId, countId, itemsList, type, isSecondary) {
             const container = document.getElementById(containerId);
             document.getElementById(countId).textContent = itemsList.length;
@@ -1215,7 +1267,6 @@ def generar_red_base64(tsv_content):
             container.innerHTML = html;
         }
 
-        // --- FILTRAR VISUALMENTE LOS CHECKBOXES O MENÚS ---
         function filterSidebarOptions(inputElement, elementsClassName) {
             const searchText = inputElement.value.trim().toLowerCase();
             const elements = document.querySelectorAll(`.${elementsClassName}`);
@@ -1230,7 +1281,6 @@ def generar_red_base64(tsv_content):
             });
         }
 
-        // --- MARCAR / DESMARCAR TODOS LOS CHECKBOXES ---
         function toggleAllCheckboxes(className, checkState, type) {
             const checkboxes = document.querySelectorAll(`.${className}`);
             if (checkboxes.length === 0) return;
@@ -1239,7 +1289,6 @@ def generar_red_base64(tsv_content):
             applyCombinedFilters(type);
         }
 
-        // --- RETORNA EL CONJUNTO ACTUAL DE DATOS FILTRADOS POR CHECKBOXES ---
         function getFilteredDataset(type) {
             const primaryCbs = document.querySelectorAll(`.dynamic-${type}-primary-filter`);
             const activePrimary = Array.from(primaryCbs).filter(cb => cb.checked).map(cb => cb.value);
@@ -1259,7 +1308,6 @@ def generar_red_base64(tsv_content):
             return [];
         }
 
-        // --- GESTIÓN INTERNA DE ORDENACIÓN EN EL CLIENTE ---
         function handleSort(section, columnName) {
             const state = sortState[section];
             
@@ -1307,7 +1355,6 @@ def generar_red_base64(tsv_content):
             });
         }
 
-        // --- APLICACIÓN DE FILTRADO COMBINADO INTERNO + ORDENACIÓN ---
         function applyCombinedFilters(type) {
             let filtered = getFilteredDataset(type);
             filtered = sortDataset(filtered, type);
@@ -1375,7 +1422,7 @@ def generar_red_base64(tsv_content):
             document.getElementById(tbodyId).innerHTML = html || '<tr><td colspan="8" class="text-center py-8 text-slate-500">No rows match the active filter criteria.</td></tr>';
         }
 
-        // --- FUNCIÓN: EXPORTAR A TSV ---
+        // --- EXPORTAR A TSV ---
         function exportToTSV(type) {
             let activeData = getFilteredDataset(type);
             activeData = sortDataset(activeData, type);
@@ -1420,8 +1467,7 @@ def generar_red_base64(tsv_content):
             }
         }
 
-        // ================= CONSULTAS SQL PRINCIPALES =================
-
+        // --- CONSULTAS SQL ---
         function searchByFood() {
             const input = document.getElementById('food-search-input').value.trim();
             if (!db) return;

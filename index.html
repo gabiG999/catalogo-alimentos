@@ -1,0 +1,1796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FoodTaxa - Microbiome Explorer</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+
+    <!-- Pyodide para ejecutar scripts de Python (NetworkX + Matplotlib + Pandas) en el navegador -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'scientific-blue': '#1e3a8a',
+                        'scientific-light': '#3b82f6',
+                        'neutral-warm': '#f8fafc'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #1e3a8a;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-neutral-warm text-slate-800 min-h-screen flex flex-col">
+
+    <!-- ==================== PANTALLA DE ACCESO / CONTRASEÑA ==================== -->
+    <div id="pantalla-login" class="fixed inset-0 bg-slate-900 z-50 flex items-center justify-center p-4">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-center border border-slate-100 fade-in">
+            <div class="w-20 h-20 bg-blue-50 text-scientific-blue rounded-full flex items-center justify-center mx-auto mb-5 text-3xl shadow-inner">
+                <i class="fas fa-lock"></i>
+            </div>
+            <h2 class="text-2xl font-bold text-slate-800 mb-1">Restricted Access</h2>
+            <p class="text-sm text-slate-500 mb-6">Enter the access passkey to unlock the FoodTaxa platform.</p>
+            
+            <div class="space-y-4">
+                <div>
+                    <input type="password" id="inputPass" placeholder="Enter password..." 
+                           class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light text-slate-800 font-medium text-center">
+                </div>
+                <button onclick="comprobarPassword()" class="w-full bg-scientific-blue hover:bg-scientific-light text-white font-bold py-3 px-6 rounded-lg transition shadow-md flex items-center justify-center gap-2">
+                    <i class="fas fa-key"></i> Unlock Workspace
+                </button>
+            </div>
+            
+            <p id="errorPass" class="text-red-500 font-semibold text-sm mt-4 hidden">
+                <i class="fas fa-exclamation-circle mr-1"></i> Incorrect password. Please try again.
+            </p>
+        </div>
+    </div>
+
+    <!-- ==================== CONTENEDOR PRINCIPAL ==================== -->
+    <div id="contenedor-app" class="hidden flex-col min-h-screen">
+        <header class="bg-scientific-blue text-white shadow-md py-4 px-6 flex justify-between items-center z-20 relative">
+            <div class="flex items-center gap-3">
+                <i class="fas fa-dna text-2xl text-scientific-light"></i>
+                <h1 class="text-2xl font-bold tracking-tight">FoodTaxa <span class="font-light text-blue-200">DB</span></h1>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="text-sm font-medium px-3 py-1 bg-blue-800 rounded-full border border-blue-700 shadow-inner flex items-center gap-2" id="db-status">
+                    <i class="fas fa-database text-amber-400" id="db-status-icon"></i> 
+                    <span id="db-status-text">Fetching database...</span>
+                </div>
+                <button onclick="cerrarSesion()" title="Lock application" class="text-blue-200 hover:text-white ml-2 text-sm">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- SECCIÓN DE CARGA INICIAL (AUTOMÁTICA + FALLBACK MANUAL) -->
+        <div id="db-upload-section" class="flex-grow flex flex-col items-center justify-center p-6 fade-in absolute inset-0 bg-neutral-warm z-10 pt-20">
+            <div class="bg-white p-8 rounded-2xl shadow-xl max-w-lg w-full text-center border border-slate-100">
+                <div class="w-20 h-20 bg-blue-50 text-scientific-blue rounded-full flex items-center justify-center mx-auto mb-6 text-4xl">
+                    <i class="fas fa-cloud-download-alt"></i>
+                </div>
+                <h2 class="text-2xl font-bold mb-2">Connecting to FoodTaxa Database</h2>
+                <p id="db-load-message" class="text-slate-500 mb-6">Downloading database from repository and initializing WebAssembly engine...</p>
+                
+                <div id="loading-spinner" class="flex flex-col items-center">
+                    <div class="loader mb-3"></div>
+                    <p class="text-xs text-slate-400 font-medium">Please wait a few seconds...</p>
+                </div>
+
+                <!-- Fallback manual en caso de error de red o ruta incorrecta -->
+                <div id="manual-fallback" class="hidden mt-6 pt-6 border-t border-slate-100">
+                    <p class="text-sm text-red-600 mb-4 font-semibold">Could not load the database automatically from the repository.</p>
+                    <label class="cursor-pointer bg-scientific-blue hover:bg-scientific-light text-white font-semibold py-2.5 px-5 rounded-lg transition shadow-md inline-flex items-center gap-2 text-sm">
+                        <i class="fas fa-folder-open"></i> Select local .db file
+                        <input type="file" id="db-file-input" class="hidden" accept=".db,.sqlite,.sqlite3">
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div id="main-app-section" class="hidden flex-grow flex flex-col fade-in">
+            
+            <div class="bg-white border-b border-slate-200 shadow-sm px-6 flex gap-2 md:gap-6 overflow-x-auto">
+                <button onclick="showSection('food')" id="tab-food" class="py-4 px-3 font-semibold text-scientific-blue border-b-2 border-scientific-blue transition whitespace-nowrap">
+                    <i class="fas fa-apple-whole mr-2"></i> Search by Food
+                </button>
+                <button onclick="showSection('bacteria')" id="tab-bacteria" class="py-4 px-3 font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition whitespace-nowrap">
+                    <i class="fas fa-bacterium mr-2"></i> Search by Bacteria
+                </button>
+                <button onclick="showSection('health_group')" id="tab-health_group" class="py-4 px-3 font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition whitespace-nowrap">
+                    <i class="fas fa-heartbeat mr-2"></i> Search by Health Group/ Population
+                </button>
+                <button onclick="showSection('paper')" id="tab-paper" class="py-4 px-3 font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition whitespace-nowrap">
+                    <i class="fas fa-file-alt mr-2"></i> Search by Paper
+                </button>
+                <button onclick="showSection('statistics')" id="tab-statistics" class="py-4 px-3 font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition whitespace-nowrap">
+                    <i class="fas fa-chart-bar mr-2"></i> Statistics
+                </button>
+            </div>
+
+            <main class="flex-grow p-4 md:p-8 max-w-[95%] w-full mx-auto">
+                
+                <!-- SECTION FOOD -->
+                <section id="section-food" class="space-y-6 fade-in">
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <h2 class="text-xl font-bold mb-4 flex items-center gap-2 text-scientific-blue">
+                            <i class="fas fa-search"></i> Which bacteria are influenced by a food?
+                        </h2>
+                        <div class="flex flex-col md:flex-row gap-4">
+                            <input type="text" id="food-search-input" placeholder="E.g. apple, fiber, yogurt... (or leave empty to show all)" 
+                                   class="w-full md:flex-grow px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light">
+                            
+                            <select id="food-category-filter" class="px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light text-slate-600 font-medium min-w-[170px]">
+                                <option value="ALL">All Categories</option>
+                                <option value="Foods">Foods</option>
+                                <option value="Nutrients and metabolites">Nutrients and metabolites</option>
+                                <option value="Diets">Diets</option>
+                                <option value="Plants and subproducts">Plants and subproducts</option>
+                                <option value="Probiotics and fermented products">Probiotics & Fermented</option>
+                            </select>
+
+                            <select id="food-effect-filter" class="px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light text-slate-600 font-medium min-w-[150px]">
+                                <option value="ALL">All Effects</option>
+                                <option value="increase">Increase Only</option>
+                                <option value="decrease">Decrease Only</option>
+                            </select>
+
+                            <div class="flex gap-2">
+                                <button onclick="searchByFood()" class="bg-scientific-blue hover:bg-scientific-light text-white font-bold py-3 px-6 rounded-lg transition shadow-md whitespace-nowrap flex-grow md:flex-grow-0">
+                                    Search
+                                </button>
+                                <button onclick="exportToTSV('food')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Export current selection to TSV">
+                                    <i class="fas fa-file-download mr-1"></i> TSV
+                                </button>
+                                <button onclick="generateNetworkGraph('food')" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Generate Network Graph from current selection">
+                                    <i class="fas fa-project-diagram mr-1"></i> Graph
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-6 gap-6 items-start">
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Filter by Food</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-food-primary-filter', true, 'food')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-food-primary-filter', false, 'food')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="food-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-food-primary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="food-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div class="overflow-x-auto max-h-[500px]">
+                                <table class="w-full text-left border-collapse">
+                                    <thead class="sticky top-0 bg-slate-50 shadow-sm z-10 border-b border-slate-200 text-slate-500 text-sm uppercase select-none">
+                                        <tr>
+                                            <th onclick="handleSort('food', 'food')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Food <span id="sort-icon-food-food" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'category')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Category <span id="sort-icon-food-category" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'bacteria')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Bacteria <span id="sort-icon-food-bacteria" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'effect')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Effect <span id="sort-icon-food-effect" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'context')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Context / Magnitude <span id="sort-icon-food-context" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'study_type')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Study Type <span id="sort-icon-food-study_type" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'sequencing')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Sequencing <span id="sort-icon-food-sequencing" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'health_group')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Health Group/ Population <span id="sort-icon-food-health_group" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('food', 'archivo_origen')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition text-center">Paper <span id="sort-icon-food-archivo_origen" class="ml-1 text-xs text-slate-400"></span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="food-results-body" class="divide-y divide-slate-100">
+                                        <tr><td colspan="9" class="py-8 text-center text-slate-400 italic">Perform a search to see the results.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Influenced Bacteria</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-food-secondary-filter', true, 'food')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-food-secondary-filter', false, 'food')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="food-bacteria-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-food-secondary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="food-bacteria-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- SECTION BACTERIA -->
+                <section id="section-bacteria" class="hidden space-y-6 fade-in">
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <h2 class="text-xl font-bold mb-4 flex items-center gap-2 text-scientific-blue">
+                            <i class="fas fa-microscope"></i> Which foods modify a specific bacteria?
+                        </h2>
+                        <div class="flex flex-col md:flex-row gap-4">
+                            <input type="text" id="bacteria-search-input" placeholder="E.g. lactobacillus, akkermansia... (or leave empty to show all)" 
+                                   class="w-full md:flex-grow px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light">
+                            
+                            <select id="bacteria-category-filter" class="px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light text-slate-600 font-medium min-w-[170px]">
+                                <option value="ALL">All Food Categories</option>
+                                <option value="Foods">Foods</option>
+                                <option value="Nutrients and metabolites">Nutrients and metabolites</option>
+                                <option value="Diets">Diets</option>
+                                <option value="Plants and subproducts">Plants and subproducts</option>
+                                <option value="Probiotics and fermented products">Probiotics & Fermented</option>
+                            </select>
+
+                            <select id="bacteria-effect-filter" class="px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light text-slate-600 font-medium min-w-[150px]">
+                                <option value="ALL">All Effects</option>
+                                <option value="increase">Increase Only</option>
+                                <option value="decrease">Decrease Only</option>
+                            </select>
+
+                            <div class="flex gap-2">
+                                <button onclick="searchByBacteria()" class="bg-scientific-blue hover:bg-scientific-light text-white font-bold py-3 px-6 rounded-lg transition shadow-md whitespace-nowrap flex-grow md:flex-grow-0">
+                                    Search
+                                </button>
+                                <button onclick="exportToTSV('bacteria')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Export current selection to TSV">
+                                    <i class="fas fa-file-download mr-1"></i> TSV
+                                </button>
+                                <button onclick="generateNetworkGraph('bacteria')" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Generate Network Graph from current selection">
+                                    <i class="fas fa-project-diagram mr-1"></i> Graph
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-6 gap-6 items-start">
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Filter by Bacteria</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-bacteria-primary-filter', true, 'bacteria')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-bacteria-primary-filter', false, 'bacteria')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="bacteria-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-bacteria-primary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="bacteria-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div class="overflow-x-auto max-h-[500px]">
+                                <table class="w-full text-left border-collapse">
+                                    <thead class="sticky top-0 bg-slate-50 shadow-sm z-10 border-b border-slate-200 text-slate-500 text-sm uppercase select-none">
+                                        <tr>
+                                            <th onclick="handleSort('bacteria', 'food')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Food <span id="sort-icon-bacteria-food" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'category')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Category <span id="sort-icon-bacteria-category" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'bacteria')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Bacteria <span id="sort-icon-bacteria-bacteria" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'effect')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Effect <span id="sort-icon-bacteria-effect" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'context')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Context / Magnitude <span id="sort-icon-bacteria-context" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'study_type')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Study Type <span id="sort-icon-bacteria-study_type" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'sequencing')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Sequencing <span id="sort-icon-bacteria-sequencing" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'health_group')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Health Group/ Population <span id="sort-icon-bacteria-health_group" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('bacteria', 'archivo_origen')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition text-center">Paper <span id="sort-icon-bacteria-archivo_origen" class="ml-1 text-xs text-slate-400"></span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="bacteria-results-body" class="divide-y divide-slate-100">
+                                        <tr><td colspan="9" class="py-8 text-center text-slate-400 italic">Perform a search to see the results.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Modifying Foods</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-bacteria-secondary-filter', true, 'bacteria')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-bacteria-secondary-filter', false, 'bacteria')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="bacteria-foods-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-bacteria-secondary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="bacteria-foods-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- SECTION HEALTH GROUP -->
+                <section id="section-health_group" class="hidden space-y-6 fade-in">
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <h2 class="text-xl font-bold mb-4 flex items-center gap-2 text-scientific-blue">
+                            <i class="fas fa-heartbeat"></i> Which interactions relate to a Health Group/ Population?
+                        </h2>
+                        <div class="flex flex-col md:flex-row gap-4">
+                            <input type="text" id="health_group-search-input" placeholder="E.g. diabetes, obesity, healthy... (or leave empty to show all)" 
+                                   class="w-full md:flex-grow px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light">
+                            
+                            <select id="health_group-effect-filter" class="px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light text-slate-600 font-medium min-w-[160px]">
+                                <option value="ALL">All Effects</option>
+                                <option value="increase">Increase Only</option>
+                                <option value="decrease">Decrease Only</option>
+                            </select>
+
+                            <div class="flex gap-2">
+                                <button onclick="searchByHealthGroup()" class="bg-scientific-blue hover:bg-scientific-light text-white font-bold py-3 px-6 rounded-lg transition shadow-md whitespace-nowrap flex-grow md:flex-grow-0">
+                                    Search
+                                </button>
+                                <button onclick="exportToTSV('health_group')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Export current selection to TSV">
+                                    <i class="fas fa-file-download mr-1"></i> TSV
+                                </button>
+                                <button onclick="generateNetworkGraph('health_group')" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Generate Network Graph from current selection">
+                                    <i class="fas fa-project-diagram mr-1"></i> Graph
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-6 gap-6 items-start">
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Filter Health Group/ Population</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-health_group-primary-filter', true, 'health_group')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-health_group-primary-filter', false, 'health_group')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="health_group-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-health_group-primary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="health_group-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div class="overflow-x-auto max-h-[500px]">
+                                <table class="w-full text-left border-collapse">
+                                    <thead class="sticky top-0 bg-slate-50 shadow-sm z-10 border-b border-slate-200 text-slate-500 text-sm uppercase select-none">
+                                        <tr>
+                                            <th onclick="handleSort('health_group', 'health_group')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Health Group/ Population <span id="sort-icon-health_group-health_group" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('health_group', 'food')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Food <span id="sort-icon-health_group-food" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('health_group', 'bacteria')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Bacteria <span id="sort-icon-health_group-bacteria" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('health_group', 'effect')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Effect <span id="sort-icon-health_group-effect" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('health_group', 'context')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Context / Magnitude <span id="sort-icon-health_group-context" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('health_group', 'study_type')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Study Type <span id="sort-icon-health_group-study_type" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('health_group', 'sequencing')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Sequencing <span id="sort-icon-health_group-sequencing" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('health_group', 'archivo_origen')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition text-center">Paper <span id="sort-icon-health_group-archivo_origen" class="ml-1 text-xs text-slate-400"></span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="health_group-results-body" class="divide-y divide-slate-100">
+                                        <tr><td colspan="8" class="py-8 text-center text-slate-400 italic">Perform a search to see the results.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Assoc. Bacteria</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-health_group-secondary-filter', true, 'health_group')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-health_group-secondary-filter', false, 'health_group')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="health_group-bacteria-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-health_group-secondary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="health_group-bacteria-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- SECTION PAPER -->
+                <section id="section-paper" class="hidden space-y-6 fade-in">
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <h2 class="text-xl font-bold mb-4 flex items-center gap-2 text-scientific-blue">
+                            <i class="fas fa-file-alt"></i> Which interactions are documented in a Paper?
+                        </h2>
+                        <div class="flex flex-col md:flex-row gap-4">
+                            <input type="text" id="paper-search-input" placeholder="E.g. Smith_2023, DOI, title keyword... (or leave empty to show all)" 
+                                   class="w-full md:flex-grow px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light">
+                            
+                            <select id="paper-effect-filter" class="px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light text-slate-600 font-medium min-w-[160px]">
+                                <option value="ALL">All Effects</option>
+                                <option value="increase">Increase Only</option>
+                                <option value="decrease">Decrease Only</option>
+                            </select>
+
+                            <div class="flex gap-2">
+                                <button onclick="searchByPaper()" class="bg-scientific-blue hover:bg-scientific-light text-white font-bold py-3 px-6 rounded-lg transition shadow-md whitespace-nowrap flex-grow md:flex-grow-0">
+                                    Search
+                                </button>
+                                <button onclick="exportToTSV('paper')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Export current selection to TSV">
+                                    <i class="fas fa-file-download mr-1"></i> TSV
+                                </button>
+                                <button onclick="generateNetworkGraph('paper')" class="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded-lg transition shadow-md whitespace-nowrap" title="Generate Network Graph from current selection">
+                                    <i class="fas fa-project-diagram mr-1"></i> Graph
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-6 gap-6 items-start">
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Filter by Paper</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-paper-primary-filter', true, 'paper')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-paper-primary-filter', false, 'paper')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="paper-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-paper-primary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="paper-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div class="overflow-x-auto max-h-[500px]">
+                                <table class="w-full text-left border-collapse">
+                                    <thead class="sticky top-0 bg-slate-50 shadow-sm z-10 border-b border-slate-200 text-slate-500 text-sm uppercase select-none">
+                                        <tr>
+                                            <th onclick="handleSort('paper', 'archivo_origen')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Paper <span id="sort-icon-paper-archivo_origen" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('paper', 'food')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Food <span id="sort-icon-paper-food" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('paper', 'bacteria')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Bacteria <span id="sort-icon-paper-bacteria" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('paper', 'effect')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Effect <span id="sort-icon-paper-effect" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('paper', 'context')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Context / Magnitude <span id="sort-icon-paper-context" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('paper', 'study_type')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Study Type <span id="sort-icon-paper-study_type" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('paper', 'sequencing')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Sequencing <span id="sort-icon-paper-sequencing" class="ml-1 text-xs text-slate-400"></span></th>
+                                            <th onclick="handleSort('paper', 'health_group')" class="py-3 px-6 cursor-pointer hover:bg-slate-100 transition">Health Group/ Population <span id="sort-icon-paper-health_group" class="ml-1 text-xs text-slate-400"></span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="paper-results-body" class="divide-y divide-slate-100">
+                                        <tr><td colspan="8" class="py-8 text-center text-slate-400 italic">Perform a search to see the results.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:sticky lg:top-4 max-h-[580px] flex flex-col">
+                            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                                <span>Assoc. Bacteria</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="toggleAllCheckboxes('dynamic-paper-secondary-filter', true, 'paper')" class="text-slate-400 hover:text-scientific-light transition" title="Select all"><i class="fas fa-check-double"></i></button>
+                                    <button onclick="toggleAllCheckboxes('dynamic-paper-secondary-filter', false, 'paper')" class="text-slate-400 hover:text-red-500 transition" title="Deselect all"><i class="fas fa-square"></i></button>
+                                    <span id="paper-bacteria-aside-count" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">0</span>
+                                </div>
+                            </h3>
+                            <input type="text" oninput="filterSidebarOptions(this, 'dynamic-paper-secondary-container')" placeholder="Filter options..." 
+                                   class="w-full text-xs px-2 py-1.5 mb-2 bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-scientific-light">
+                            <div id="paper-bacteria-checkbox-container" class="overflow-y-auto space-y-2 pr-1 text-sm text-slate-700 flex-grow py-2 italic text-slate-400">
+                                No active search.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- SECTION STATISTICS -->
+                <section id="section-statistics" class="hidden space-y-6 fade-in">
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2">
+                            <h2 class="text-xl font-bold flex items-center gap-2 text-scientific-blue">
+                                <i class="fas fa-chart-pie"></i> Database Overview
+                            </h2>
+                        </div>
+                        <p class="text-xs text-slate-400 mb-6 italic">Click on any card to inspect its elements, or use the <i class="fas fa-download"></i> icon on each card to directly export the full table to TSV.</p>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-5 gap-4 text-center select-none">
+                            <!-- Card Foods -->
+                            <div onclick="showStatDetails('foods', 'Total Registered Foods', 'SELECT * FROM foods ORDER BY name ASC', 'fa-apple-whole', false)" 
+                                 class="relative bg-blue-50 p-6 rounded-xl border border-blue-100 shadow-sm cursor-pointer hover:scale-[1.03] transition-transform duration-200 group">
+                                <button onclick="event.stopPropagation(); directExportStatCategory('foods', 'SELECT * FROM foods ORDER BY name ASC')" 
+                                        class="absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/80 hover:bg-emerald-600 text-slate-500 hover:text-white flex items-center justify-center transition shadow-sm" 
+                                        title="Download all Foods (TSV)">
+                                    <i class="fas fa-download text-xs"></i>
+                                </button>
+                                <i class="fas fa-apple-whole text-4xl text-scientific-light mb-3"></i>
+                                <h3 class="text-4xl font-bold text-scientific-blue" id="stat-foods">0</h3>
+                                <p class="text-slate-600 font-medium mt-2">Total Foods <i class="fas fa-chevron-down text-xs ml-1 text-blue-300"></i></p>
+                            </div>
+
+                            <!-- Card Bacteria -->
+                            <div onclick="showStatDetails('bacteria', 'Total Registered Bacteria', 'SELECT * FROM bacteria ORDER BY name ASC', 'fa-bacterium', true)" 
+                                 class="relative bg-emerald-50 p-6 rounded-xl border border-emerald-100 shadow-sm cursor-pointer hover:scale-[1.03] transition-transform duration-200 group">
+                                <button onclick="event.stopPropagation(); directExportStatCategory('bacteria', 'SELECT * FROM bacteria ORDER BY name ASC')" 
+                                        class="absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/80 hover:bg-emerald-600 text-slate-500 hover:text-white flex items-center justify-center transition shadow-sm" 
+                                        title="Download all Bacteria (TSV)">
+                                    <i class="fas fa-download text-xs"></i>
+                                </button>
+                                <i class="fas fa-bacterium text-4xl text-emerald-500 mb-3"></i>
+                                <h3 class="text-4xl font-bold text-emerald-700" id="stat-bacteria">0</h3>
+                                <p class="text-slate-600 font-medium mt-2">Total Bacteria <i class="fas fa-chevron-down text-xs ml-1 text-emerald-300"></i></p>
+                            </div>
+
+                            <!-- Card Health Groups -->
+                            <div onclick="showStatDetails('health_groups', 'Total Registered Health Groups/ Populations', 'SELECT * FROM health_groups ORDER BY name ASC', 'fa-heartbeat', false)" 
+                                 class="relative bg-rose-50 p-6 rounded-xl border border-rose-100 shadow-sm cursor-pointer hover:scale-[1.03] transition-transform duration-200 group">
+                                <button onclick="event.stopPropagation(); directExportStatCategory('health_groups', 'SELECT * FROM health_groups ORDER BY name ASC')" 
+                                        class="absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/80 hover:bg-emerald-600 text-slate-500 hover:text-white flex items-center justify-center transition shadow-sm" 
+                                        title="Download all Health Groups (TSV)">
+                                    <i class="fas fa-download text-xs"></i>
+                                </button>
+                                <i class="fas fa-heartbeat text-4xl text-rose-500 mb-3"></i>
+                                <h3 class="text-4xl font-bold text-rose-700" id="stat-health">0</h3>
+                                <p class="text-slate-600 font-medium mt-2">Health Groups/ Populations <i class="fas fa-chevron-down text-xs ml-1 text-rose-300"></i></p>
+                            </div>
+
+                            <!-- Card Papers -->
+                            <div onclick="showStatDetails('papers', 'Total Indexed Papers', 'SELECT * FROM papers ORDER BY archivo_origen ASC', 'fa-file-alt', false)" 
+                                 class="relative bg-amber-50 p-6 rounded-xl border border-amber-100 shadow-sm cursor-pointer hover:scale-[1.03] transition-transform duration-200 group">
+                                <button onclick="event.stopPropagation(); directExportStatCategory('papers', 'SELECT * FROM papers ORDER BY archivo_origen ASC')" 
+                                        class="absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/80 hover:bg-emerald-600 text-slate-500 hover:text-white flex items-center justify-center transition shadow-sm" 
+                                        title="Download all Papers metadata (TSV)">
+                                    <i class="fas fa-download text-xs"></i>
+                                </button>
+                                <i class="fas fa-file-alt text-4xl text-amber-500 mb-3"></i>
+                                <h3 class="text-4xl font-bold text-amber-700" id="stat-papers">0</h3>
+                                <p class="text-slate-600 font-medium mt-2">Papers Indexed <i class="fas fa-chevron-down text-xs ml-1 text-amber-300"></i></p>
+                            </div>
+
+                            <!-- Card Relationships -->
+                            <div onclick="showStatDetails('relationships', 'Total Registered Relationships', 'SELECT f.name || \' → \' || b.name || \' (\' || COALESCE(fbe.effect, \'N/A\') || \')\' AS summary, f.name AS food, COALESCE(f.category, \'Unclassified\') AS category, b.name AS bacteria, fbe.effect, fbe.magnitude, fbe.context, fbe.study_type, fbe.sequencing, COALESCE(hg.name, \'General/Unspecified\') AS health_group, p.archivo_origen AS paper FROM food_bacteria_effects fbe JOIN foods f ON fbe.food_id = f.id JOIN bacteria b ON fbe.bacteria_id = b.id JOIN papers p ON fbe.paper_id = p.id LEFT JOIN health_groups hg ON fbe.health_group_id = hg.id ORDER BY f.name ASC, b.name ASC', 'fa-project-diagram', false)"
+                                 class="relative bg-purple-50 p-6 rounded-xl border border-purple-100 shadow-sm cursor-pointer hover:scale-[1.03] transition-transform duration-200 group">
+                                <button onclick="event.stopPropagation(); directExportStatCategory('relationships', 'SELECT f.name AS food, COALESCE(f.category, \'Unclassified\') AS category, b.name AS bacteria, fbe.effect, fbe.magnitude, fbe.context, fbe.study_type, fbe.sequencing, COALESCE(hg.name, \'General/Unspecified\') AS health_group, p.archivo_origen AS paper FROM food_bacteria_effects fbe JOIN foods f ON fbe.food_id = f.id JOIN bacteria b ON fbe.bacteria_id = b.id JOIN papers p ON fbe.paper_id = p.id LEFT JOIN health_groups hg ON fbe.health_group_id = hg.id ORDER BY f.name ASC, b.name ASC')" 
+                                        class="absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/80 hover:bg-emerald-600 text-slate-500 hover:text-white flex items-center justify-center transition shadow-sm" 
+                                        title="Download all Relationships (TSV)">
+                                    <i class="fas fa-download text-xs"></i>
+                                </button>
+                                <i class="fas fa-project-diagram text-4xl text-purple-500 mb-3"></i>
+                                <h3 class="text-4xl font-bold text-purple-700" id="stat-relationships">0</h3>
+                                <p class="text-slate-600 font-medium mt-2">Relationships <i class="fas fa-chevron-down text-xs ml-1 text-purple-300"></i></p>
+                            </div>
+                        </div>
+
+                        <div id="stat-detail-menu" class="hidden mt-6 bg-white rounded-xl border border-slate-200 shadow-sm p-6 fade-in flex flex-col max-h-[500px]">
+                            <div class="flex flex-wrap justify-between items-center border-b border-slate-100 pb-3 mb-4 gap-2">
+                                <div class="flex items-center gap-2 font-bold text-slate-800 text-lg">
+                                    <i id="stat-detail-icon" class="fas"></i>
+                                    <span id="stat-detail-title">Detail List</span>
+                                    <span id="stat-detail-count-badge" class="text-xs bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded-full font-bold ml-1">0</span>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <button onclick="exportCurrentStatDetailTSV()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2 px-3.5 rounded-lg transition shadow-sm flex items-center gap-1.5" title="Download visible items in this list as TSV">
+                                        <i class="fas fa-file-download"></i> Download List (TSV)
+                                    </button>
+                                    <button onclick="document.getElementById('stat-detail-menu').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-sm px-2 py-1">
+                                        <i class="fas fa-times mr-1"></i> Close Menu
+                                    </button>
+                                </div>
+                            </div>
+                            <input type="text" id="stat-detail-search-input" oninput="filterSidebarOptions(this, 'dynamic-stat-detail-item')" placeholder="Search in this list..." 
+                                   class="w-full text-sm px-3 py-2 mb-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-scientific-light">
+                            
+                            <div id="stat-detail-list-container" class="overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 text-sm text-slate-700 p-1">
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+            </main>
+        </div>
+
+        <!-- MODAL DE METADATOS DE PAPER -->
+        <div id="paper-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-60 z-50 flex items-center justify-center p-4 fade-in">
+            <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+                <div class="bg-scientific-blue text-white px-6 py-4 flex justify-between items-center">
+                    <h3 class="text-lg font-bold flex items-center gap-2"><i class="fas fa-file-alt"></i> Paper Metadata</h3>
+                    <button onclick="closePaperModal()" class="text-blue-200 hover:text-white transition">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                <div class="p-6 overflow-y-auto bg-slate-50" id="paper-modal-content">
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL DE INFORMACIÓN DE BACTERIA -->
+        <div id="bacteria-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-60 z-50 flex items-center justify-center p-4 fade-in">
+            <div class="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden">
+                <div class="bg-scientific-blue text-white px-6 py-4 flex justify-between items-center">
+                    <h3 class="text-lg font-bold flex items-center gap-2"><i class="fas fa-bacterium"></i> Bacteria Information</h3>
+                    <button onclick="closeBacteriaModal()" class="text-blue-200 hover:text-white transition">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                <div class="p-6 overflow-y-auto bg-slate-50" id="bacteria-modal-content">
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL DE GRÁFICO DE RED (PYTHON) -->
+        <div id="graph-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-60 z-50 flex items-center justify-center p-4 fade-in">
+            <div class="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[95vh] flex flex-col overflow-hidden">
+                <div class="bg-scientific-blue text-white px-6 py-4 flex justify-between items-center">
+                    <h3 class="text-lg font-bold flex items-center gap-2">
+                        <i class="fas fa-project-diagram"></i> Food-Microbe Interaction Network (Python Generator)
+                    </h3>
+                    <div class="flex items-center gap-3">
+                        <a id="download-graph-btn" href="#" download="red_interacciones.png" class="hidden bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold py-1.5 px-4 rounded-lg transition shadow flex items-center gap-1.5">
+                            <i class="fas fa-download"></i> Download PNG (300 DPI)
+                        </a>
+                        <button onclick="closeGraphModal()" class="text-blue-200 hover:text-white transition">
+                            <i class="fas fa-times text-xl"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="p-6 overflow-y-auto bg-slate-50 flex flex-col items-center justify-center min-h-[450px]" id="graph-modal-content">
+                    <div id="graph-loading" class="flex flex-col items-center text-center">
+                        <div class="loader mb-4"></div>
+                        <p id="graph-loading-text" class="text-slate-700 font-semibold">Initializing Python environment (Pyodide)...</p>
+                        <p class="text-xs text-slate-400 mt-1">First run loads pandas, networkx & matplotlib in memory (~5-10 seconds).</p>
+                    </div>
+                    <img id="graph-output-img" class="hidden max-w-full max-h-[75vh] object-contain rounded-lg shadow border border-slate-200 bg-white p-2" alt="Generated Network Graph">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== CONTROL DE ACCESO ==================== -->
+    <script>
+        const CONTRASENA_CORRECTA = "fisabiomola2026";
+
+        function comprobarPassword() {
+            const passIntroducida = document.getElementById('inputPass').value.trim();
+
+            if (passIntroducida === CONTRASENA_CORRECTA) {
+                sessionStorage.setItem('foodtaxa_autenticado', 'true');
+                desbloquearInterfaz();
+            } else {
+                document.getElementById('errorPass').classList.remove('hidden');
+                document.getElementById('inputPass').value = '';
+                document.getElementById('inputPass').focus();
+            }
+        }
+
+        function desbloquearInterfaz() {
+            document.getElementById('pantalla-login').classList.add('hidden');
+            const app = document.getElementById('contenedor-app');
+            app.classList.remove('hidden');
+            app.classList.add('flex');
+            
+            // Iniciar la autocarga de la base de datos tras la autenticación
+            initAutoLoadDB();
+        }
+
+        function cerrarSesion() {
+            sessionStorage.removeItem('foodtaxa_autenticado');
+            location.reload();
+        }
+
+        document.getElementById('inputPass').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') comprobarPassword();
+        });
+
+        // Comprobación de persistencia de sesión previa
+        if (sessionStorage.getItem('foodtaxa_autenticado') === 'true') {
+            desbloquearInterfaz();
+        }
+    </script>
+
+    <!-- ==================== LÓGICA DE LA APLICACIÓN ==================== -->
+    <script>
+        // RUTA RELATIVA AL ARCHIVO EN EL REPOSITORIO
+        const REPO_DB_FILENAME = './mydb.db';
+
+        let db = null;
+        let pyodide = null;
+        let pyodideReady = false;
+        
+        let currentFoodResults = [];
+        let currentBacteriaResults = [];
+        let currentHealthGroupResults = [];
+        let currentPaperResults = [];
+
+        let currentStatExportState = {
+            categoryKey: '',
+            columns: [],
+            rows: [],
+            displayColIndex: 0
+        };
+
+        let sortState = {
+            food: { column: null, direction: 'asc' },
+            bacteria: { column: null, direction: 'asc' },
+            health_group: { column: null, direction: 'asc' },
+            paper: { column: null, direction: 'asc' }
+        };
+
+        // --- CARGA AUTOMÁTICA DE LA BASE DE DATOS DESDE GITHUB (FETCH) ---
+        async function initAutoLoadDB() {
+            if (db) return;
+            
+            const msgEl = document.getElementById('db-load-message');
+            const statusIcon = document.getElementById('db-status-icon');
+            const statusText = document.getElementById('db-status-text');
+
+            try {
+                msgEl.textContent = `Downloading ${REPO_DB_FILENAME} from repository...`;
+                const response = await fetch(REPO_DB_FILENAME);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status} - Could not find ${REPO_DB_FILENAME}`);
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+                
+                msgEl.textContent = "Initializing SQLite WebAssembly engine...";
+                const SQL = await initSqlJs({ 
+                    locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` 
+                });
+
+                db = new SQL.Database(new Uint8Array(arrayBuffer));
+
+                document.getElementById('db-upload-section').classList.add('hidden');
+                document.getElementById('main-app-section').classList.remove('hidden');
+
+                statusIcon.className = "fas fa-database text-emerald-400";
+                statusText.textContent = "Database connected";
+
+                loadStatistics();
+            } catch (err) {
+                console.warn("Fallo en la carga automática:", err);
+                msgEl.textContent = "Automatic fetch failed: " + err.message;
+                document.getElementById('loading-spinner').classList.add('hidden');
+                document.getElementById('manual-fallback').classList.remove('hidden');
+                
+                statusIcon.className = "fas fa-database text-red-400";
+                statusText.textContent = "Database disconnected";
+            }
+        }
+
+        // --- SISTEMA DE PYODIDE PARA EJECUTAR TU SCRIPT PYTHON ---
+        async function ensurePyodideLoaded() {
+            if (pyodideReady) return pyodide;
+            
+            const statusText = document.getElementById('graph-loading-text');
+            statusText.textContent = "Loading Python WebAssembly runtime...";
+            pyodide = await loadPyodide();
+            
+            statusText.textContent = "Installing pandas, networkx, and matplotlib...";
+            await pyodide.loadPackage(["pandas", "networkx", "matplotlib"]);
+            
+            await pyodide.runPythonAsync(`
+import io
+import base64
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib.lines import Line2D
+import matplotlib.pyplot as plt
+import networkx as nx
+import pandas as pd
+
+def generar_red_base64(tsv_content):
+    df = pd.read_csv(io.StringIO(tsv_content), sep="\\t")
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    columnas_esperadas = {"food", "bacteria", "effect"}
+    if not columnas_esperadas.issubset(df.columns):
+        raise ValueError(f"El archivo debe contener las columnas: {columnas_esperadas}")
+
+    df["food"] = df["food"].astype(str).str.strip()
+    df["microbe"] = df["bacteria"].astype(str).str.strip()
+    df["relation"] = df["effect"].astype(str).str.strip().str.lower()
+
+    food_counts = df["food"].value_counts().to_dict()
+
+    interaction_counts = (
+        df.groupby(["food", "microbe", "relation"])
+        .size()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
+
+    if "increase" not in interaction_counts.columns:
+        interaction_counts["increase"] = 0
+    if "decrease" not in interaction_counts.columns:
+        interaction_counts["decrease"] = 0
+
+    G = nx.DiGraph()
+
+    foods = df["food"].unique()
+    microbes = df["microbe"].unique()
+
+    G.add_nodes_from(foods, node_type="food")
+    G.add_nodes_from(microbes, node_type="microbe")
+
+    for _, row in interaction_counts.iterrows():
+        u = row["food"]
+        v = row["microbe"]
+        inc = row["increase"]
+        dec = row["decrease"]
+        total = inc + dec
+
+        if inc > dec:
+            dominant_effect = "increase"
+        elif dec > inc:
+            dominant_effect = "decrease"
+        else:
+            dominant_effect = "tie"
+
+        G.add_edge(
+            u, v, dominant=dominant_effect, total_weight=total, inc=inc, dec=dec
+        )
+
+    pos = nx.spring_layout(G, k=1.4, seed=42)
+    plt.figure(figsize=(14, 9))
+
+    food_sizes = [800 + (food_counts[f] * 250) for f in foods]
+
+    nx.draw_networkx_nodes(
+        G, pos, nodelist=foods, node_color="#82c91e", node_shape="s", node_size=food_sizes, label="Food"
+    )
+    nx.draw_networkx_nodes(
+        G, pos, nodelist=microbes, node_color="#fd7e14", node_shape="o", node_size=1600, label="Microbe"
+    )
+
+    inc_edges = [(u, v) for u, v, d in G.edges(data=True) if d["dominant"] == "increase"]
+    dec_edges = [(u, v) for u, v, d in G.edges(data=True) if d["dominant"] == "decrease"]
+    tie_edges = [(u, v) for u, v, d in G.edges(data=True) if d["dominant"] == "tie"]
+
+    if inc_edges:
+        widths_inc = [1.2 + 0.6 * G[u][v]["total_weight"] for u, v in inc_edges]
+        nx.draw_networkx_edges(
+            G, pos, edgelist=inc_edges, edge_color="#2b8a3e", width=widths_inc, arrows=True, arrowsize=20, connectionstyle="arc3,rad=0.08"
+        )
+    if dec_edges:
+        widths_dec = [1.2 + 0.6 * G[u][v]["total_weight"] for u, v in dec_edges]
+        nx.draw_networkx_edges(
+            G, pos, edgelist=dec_edges, edge_color="#c92a2a", width=widths_dec, style="dashed", arrows=True, arrowsize=20, connectionstyle="arc3,rad=0.08"
+        )
+    if tie_edges:
+        widths_tie = [1.2 + 0.6 * G[u][v]["total_weight"] for u, v in tie_edges]
+        nx.draw_networkx_edges(
+            G, pos, edgelist=tie_edges, edge_color="#868e96", width=widths_tie, style="dotted", arrows=True, arrowsize=20, connectionstyle="arc3,rad=0.08"
+        )
+
+    nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", font_color="#212529")
+
+    elementos_leyenda = [
+        Line2D([0], [0], marker="s", color="w", markerfacecolor="#82c91e", markersize=11, label="Food (size ~ degree)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#fd7e14", markersize=11, label="Microbe"),
+        Line2D([0], [0], color="#2b8a3e", lw=2.5, label="Majority Increase"),
+        Line2D([0], [0], color="#c92a2a", lw=2.5, linestyle="--", label="Majority Decrease"),
+        Line2D([0], [0], color="#868e96", lw=2.5, linestyle=":", label="Tie (Increase == Decrease)")
+    ]
+
+    plt.legend(handles=elementos_leyenda, loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0.0, frameon=True, fontsize=10)
+    plt.axis("off")
+    plt.tight_layout()
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+    plt.close()
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode("utf-8")
+            `);
+
+            pyodideReady = true;
+            return pyodide;
+        }
+
+        async function generateNetworkGraph(type) {
+            let activeData = getFilteredDataset(type);
+            if (!activeData || activeData.length === 0) {
+                alert("There are no rows or active filters selected to generate the graph.");
+                return;
+            }
+
+            const modal = document.getElementById('graph-modal');
+            const loadingDiv = document.getElementById('graph-loading');
+            const loadingText = document.getElementById('graph-loading-text');
+            const outputImg = document.getElementById('graph-output-img');
+            const downloadBtn = document.getElementById('download-graph-btn');
+
+            modal.classList.remove('hidden');
+            loadingDiv.classList.remove('hidden');
+            outputImg.classList.add('hidden');
+            downloadBtn.classList.add('hidden');
+
+            try {
+                await ensurePyodideLoaded();
+                loadingText.textContent = "Rendering network graph with NetworkX & Matplotlib...";
+
+                const headers = ["food", "bacteria", "effect"];
+                const tsvRows = activeData.map(row => [
+                    row.food || "",
+                    row.bacteria || "",
+                    row.effect || "N/A"
+                ].join("\t"));
+                const tsvContent = [headers.join("\t"), ...tsvRows].join("\n");
+
+                pyodide.globals.set("tsv_input_data", tsvContent);
+                const base64Img = await pyodide.runPythonAsync(`generar_red_base64(tsv_input_data)`);
+
+                const dataUrl = `data:image/png;base64,${base64Img}`;
+                outputImg.src = dataUrl;
+                downloadBtn.href = dataUrl;
+                
+                const timestamp = new Date().toISOString().slice(0,10);
+                downloadBtn.download = `foodtaxa_network_${type}_${timestamp}.png`;
+
+                loadingDiv.classList.add('hidden');
+                outputImg.classList.remove('hidden');
+                downloadBtn.classList.remove('hidden');
+            } catch (err) {
+                console.error("Error generating Python graph:", err);
+                alert("Error generating graph: " + err.message);
+                closeGraphModal();
+            }
+        }
+
+        function closeGraphModal() {
+            document.getElementById('graph-modal').classList.add('hidden');
+        }
+
+        // --- TAB SYSTEM ---
+        function showSection(section) {
+            const sections = ['food', 'bacteria', 'health_group', 'paper', 'statistics'];
+            sections.forEach(sec => {
+                document.getElementById(`section-${sec}`).classList.add('hidden');
+                document.getElementById(`tab-${sec}`).className = 'py-4 px-3 font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 transition whitespace-nowrap';
+            });
+            
+            document.getElementById(`section-${section}`).classList.remove('hidden');
+            document.getElementById(`tab-${section}`).className = 'py-4 px-3 font-semibold text-scientific-blue border-b-2 border-scientific-blue transition whitespace-nowrap';
+            
+            if (section !== 'statistics') {
+                document.getElementById('stat-detail-menu').classList.add('hidden');
+            }
+        }
+
+        // --- BACTERIA DETAILS LOGIC ---
+        function showBacteriaDetails(bacteriaName) {
+            if (!db) return;
+            try {
+                const query = `SELECT * FROM bacteria WHERE name = $name LIMIT 1`;
+                const stmt = db.prepare(query);
+                stmt.bind({ $name: bacteriaName });
+                
+                let html = '';
+                if (stmt.step()) {
+                    const bacteriaRow = stmt.getAsObject();
+                    
+                    let taxonID = '';
+                    const exactMatches = ['taxon_id', 'taxonid', 'ncbi_id', 'taxon_id_ncbi', 'id_taxon', 'taxon_ids'];
+                    for (let match of exactMatches) {
+                        if (bacteriaRow[match] !== undefined && bacteriaRow[match] !== null) {
+                            taxonID = bacteriaRow[match].toString().trim();
+                            break;
+                        }
+                    }
+                    if (!taxonID) {
+                        for (let key of Object.keys(bacteriaRow)) {
+                            if (key.toLowerCase() !== 'name' && (key.toLowerCase().includes('id') || key.toLowerCase().includes('tax'))) {
+                                if (bacteriaRow[key] !== undefined && bacteriaRow[key] !== null) {
+                                    taxonID = bacteriaRow[key].toString().trim();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    const ncbiLink = taxonID && taxonID !== "None" && taxonID !== "" ? 
+                        `<a href="https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=${taxonID}" target="_blank" class="text-scientific-light hover:text-scientific-blue font-bold underline flex items-center gap-1 mt-1">${taxonID} <i class="fas fa-external-link-alt text-xs"></i></a>` : 
+                        `<span class="text-slate-400 italic block mt-1">Not available in database</span>`;
+
+                    html = `
+                        <div class="bg-white p-5 rounded-lg border border-slate-200 shadow-sm space-y-4">
+                            <div>
+                                <strong class="text-slate-500 block text-xs uppercase tracking-wider mb-1">Scientific Name</strong>
+                                <span class="text-xl font-bold text-slate-800 italic">${bacteriaRow.name || bacteriaName}</span>
+                            </div>
+                            <div class="pt-3 border-t border-slate-100">
+                                <strong class="text-slate-500 block text-xs uppercase tracking-wider mb-1">Taxon ID (NCBI Browser)</strong>
+                                ${ncbiLink}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    html = `
+                        <div class="bg-white p-5 rounded-lg border border-slate-200 shadow-sm space-y-4">
+                            <div>
+                                <strong class="text-slate-500 block text-xs uppercase tracking-wider mb-1">Scientific Name</strong>
+                                <span class="text-xl font-bold text-slate-800 italic">${bacteriaName}</span>
+                            </div>
+                            <div class="pt-3 border-t border-slate-100">
+                                <strong class="text-slate-500 block text-xs uppercase tracking-wider mb-1">Taxon ID (NCBI Browser)</strong>
+                                <span class="text-slate-400 italic block mt-1">No additional index record found</span>
+                            </div>
+                        </div>
+                    `;
+                }
+                document.getElementById('bacteria-modal-content').innerHTML = html;
+                document.getElementById('bacteria-modal').classList.remove('hidden');
+                stmt.free();
+            } catch (e) {
+                console.error("Error fetching bacteria details:", e);
+                alert("Error retrieving bacteria taxonomy data.");
+            }
+        }
+
+        function closeBacteriaModal() {
+            document.getElementById('bacteria-modal').classList.add('hidden');
+        }
+
+        // --- PAPER DETAILS MODAL LOGIC ---
+        function showPaperDetails(archivoOrigen) {
+            if (!db) return;
+            try {
+                const query = `SELECT * FROM papers WHERE archivo_origen = $id LIMIT 1`;
+                const stmt = db.prepare(query);
+                stmt.bind({ $id: archivoOrigen });
+                
+                if (stmt.step()) {
+                    const paper = stmt.getAsObject();
+                    
+                    const doiLink = paper.doi ? `<a href="https://doi.org/${paper.doi}" target="_blank" class="text-scientific-light hover:underline">${paper.doi}</a>` : 'N/A';
+                    const pmidLink = paper.pmid ? `<a href="https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}" target="_blank" class="text-scientific-light hover:underline">${paper.pmid}</a>` : 'N/A';
+                    const pmcidLink = paper.pmcid_limpio ? `<a href="https://www.ncbi.nlm.nih.gov/pmc/articles/${paper.pmcid_limpio}" target="_blank" class="text-scientific-light hover:underline">${paper.pmcid_limpio}</a>` : 'N/A';
+
+                    let html = `
+                        <div class="bg-white p-6 rounded-lg border border-slate-200 shadow-sm mb-6">
+                            <h4 class="text-2xl font-bold text-slate-800 mb-3 leading-tight">${paper.titulo || 'No Title Available'}</h4>
+                            <p class="text-sm text-scientific-blue font-medium"><i class="fas fa-users mr-1"></i> ${paper.autores || 'Unknown Authors'}</p>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="bg-white p-5 rounded-lg border border-slate-200 shadow-sm space-y-3">
+                                <h5 class="font-bold text-slate-700 border-b border-slate-100 pb-2 mb-3 flex items-center gap-2"><i class="fas fa-fingerprint text-slate-400"></i> Identifiers</h5>
+                                <p class="text-sm flex justify-between"><strong class="text-slate-500">Archive ID:</strong> <span class="text-slate-800 font-medium">${paper.archivo_origen || 'N/A'}</span></p>
+                                <p class="text-sm flex justify-between"><strong class="text-slate-500">DOI:</strong> <span class="font-medium">${doiLink}</span></p>
+                                <p class="text-sm flex justify-between"><strong class="text-slate-500">PMID:</strong> <span class="font-medium">${pmidLink}</span></p>
+                                <p class="text-sm flex justify-between"><strong class="text-slate-500">PMCID:</strong> <span class="font-medium">${pmcidLink}</span></p>
+                            </div>
+                            
+                            <div class="bg-white p-5 rounded-lg border border-slate-200 shadow-sm space-y-3">
+                                <h5 class="font-bold text-slate-700 border-b border-slate-100 pb-2 mb-3 flex items-center gap-2"><i class="fas fa-book-open text-slate-400"></i> Publication Info</h5>
+                                <p class="text-sm"><strong class="text-slate-500 block text-xs uppercase mb-1">Journal</strong> <span class="font-medium text-slate-800">${paper.revista_completa || paper.revista_abreviada || 'N/A'}</span></p>
+                                <div class="grid grid-cols-2 gap-3 mt-2">
+                                    <p class="text-sm"><strong class="text-slate-500 block text-xs uppercase">Date</strong> <span class="text-slate-800">${paper.fecha_publicacion || paper.fecha_epub || 'N/A'}</span></p>
+                                    <p class="text-sm"><strong class="text-slate-500 block text-xs uppercase">Vol / Issue</strong> <span class="text-slate-800">${paper.volumen || '-'}${paper.fasciculo ? ' / ' + paper.fasciculo : ''}</span></p>
+                                    <p class="text-sm"><strong class="text-slate-500 block text-xs uppercase">Pages</strong> <span class="text-slate-800">${paper.paginas || 'N/A'}</span></p>
+                                    <p class="text-sm"><strong class="text-slate-500 block text-xs uppercase">Type</strong> <span class="text-slate-800">${paper.tipo_publicacion || 'N/A'}</span></p>
+                                </div>
+                                <div class="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
+                                    <strong class="text-slate-500 text-sm">PMC Citations:</strong>
+                                    <span class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-xs font-bold">${paper.conteo_citas_pmc !== null ? paper.conteo_citas_pmc : '0'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('paper-modal-content').innerHTML = html;
+                    document.getElementById('paper-modal').classList.remove('hidden');
+                } else {
+                    alert("No metadata details found for this paper ID.");
+                }
+                stmt.free();
+            } catch (e) {
+                console.error("Error fetching paper details:", e);
+                alert("Error retrieving paper information.");
+            }
+        }
+
+        function closePaperModal() {
+            document.getElementById('paper-modal').classList.add('hidden');
+        }
+
+        // --- CÁLCULO DE ESTADÍSTICAS ---
+        function loadStatistics() {
+            if (!db) return;
+            try {
+                const foodsCount = db.exec("SELECT COUNT(*) FROM foods")[0].values[0][0];
+                const bacteriaCount = db.exec("SELECT COUNT(*) FROM bacteria")[0].values[0][0];
+                const healthCount = db.exec("SELECT COUNT(*) FROM health_groups")[0].values[0][0];
+                const papersCount = db.exec("SELECT COUNT(*) FROM papers")[0].values[0][0];
+                const relationsCount = db.exec("SELECT COUNT(*) FROM food_bacteria_effects")[0].values[0][0];
+
+                document.getElementById('stat-foods').textContent = foodsCount;
+                document.getElementById('stat-bacteria').textContent = bacteriaCount;
+                document.getElementById('stat-health').textContent = healthCount;
+                document.getElementById('stat-papers').textContent = papersCount;
+                document.getElementById('stat-relationships').textContent = relationsCount;
+            } catch (error) {
+                console.error("SQL Error computing statistics:", error);
+            }
+        }
+
+        // --- DESPLEGAR MENÚ DE VALORES DESDE LAS TARJETAS ---
+        function showStatDetails(categoryKey, menuTitle, sqlQuery, iconClass, isItalic) {
+            if (!db) return;
+            
+            const menuContainer = document.getElementById('stat-detail-menu');
+            const listContainer = document.getElementById('stat-detail-list-container');
+            const inputSearch = document.getElementById('stat-detail-search-input');
+            const countBadge = document.getElementById('stat-detail-count-badge');
+            
+            inputSearch.value = '';
+
+            try {
+                const res = db.exec(sqlQuery);
+                let html = '';
+                
+                if (res.length > 0 && res[0].values) {
+                    const columns = res[0].columns;
+                    const rows = res[0].values;
+
+                    let displayColIdx = columns.findIndex(c => 
+                        c.toLowerCase() === 'name' || 
+                        c.toLowerCase() === 'archivo_origen' || 
+                        c.toLowerCase() === 'summary'
+                    );
+                    if (displayColIdx === -1) displayColIdx = 0;
+
+                    currentStatExportState = {
+                        categoryKey: categoryKey,
+                        columns: columns,
+                        rows: rows,
+                        displayColIndex: displayColIdx
+                    };
+
+                    countBadge.textContent = rows.length;
+
+                    rows.forEach((val, idx) => {
+                        const itemText = (val[displayColIdx] !== null && val[displayColIdx] !== undefined) ? val[displayColIdx].toString() : 'Unspecified';
+                        const italicStyle = isItalic ? 'italic' : '';
+                        
+                        let onClickAttr = '';
+                        let extraClass = '';
+                        if (categoryKey === 'bacteria') {
+                            onClickAttr = `onclick="showBacteriaDetails('${itemText.replace(/'/g, "\\'")}')"`;
+                            extraClass = 'cursor-pointer text-scientific-blue hover:text-scientific-light hover:underline';
+                        } else if (categoryKey === 'papers') {
+                            onClickAttr = `onclick="showPaperDetails('${itemText.replace(/'/g, "\\'")}')"`;
+                            extraClass = 'cursor-pointer text-scientific-blue hover:text-scientific-light hover:underline';
+                        }
+                        
+                        html += `
+                            <div class="dynamic-stat-detail-item flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-100 rounded-lg hover:bg-slate-100 transition select-text ${onClickAttr ? 'cursor-pointer' : ''}" ${onClickAttr} data-text="${itemText.toLowerCase()}" data-row-idx="${idx}">
+                                <i class="fas ${iconClass} text-xs text-slate-400"></i>
+                                <span class="font-medium text-slate-700 truncate ${italicStyle} ${extraClass}" title="${itemText}">${itemText}</span>
+                            </div>
+                        `;
+                    });
+                } else {
+                    currentStatExportState = { categoryKey: categoryKey, columns: [], rows: [], displayColIndex: 0 };
+                    countBadge.textContent = '0';
+                    html = `<p class="italic text-slate-400 p-2 col-span-4">No elements found in this category.</p>`;
+                }
+
+                document.getElementById('stat-detail-icon').className = `fas ${iconClass} text-scientific-light`;
+                document.getElementById('stat-detail-title').textContent = menuTitle;
+                listContainer.innerHTML = html;
+                
+                menuContainer.classList.remove('hidden');
+                menuContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+            } catch (error) {
+                console.error("SQL Error retrieving card details:", error);
+                alert("Error loading fields.");
+            }
+        }
+
+        // --- EXPORTAR LISTADO ACTUAL DE ESTADÍSTICAS ---
+        function exportCurrentStatDetailTSV() {
+            if (!currentStatExportState.rows || currentStatExportState.rows.length === 0) {
+                alert("No data available to export in this category.");
+                return;
+            }
+
+            const searchInput = document.getElementById('stat-detail-search-input');
+            const filterText = searchInput ? searchInput.value.trim().toLowerCase() : '';
+            const displayIdx = currentStatExportState.displayColIndex;
+
+            const filteredRows = currentStatExportState.rows.filter(row => {
+                if (!filterText) return true;
+                const cellVal = (row[displayIdx] !== null && row[displayIdx] !== undefined) ? row[displayIdx].toString().toLowerCase() : '';
+                return cellVal.includes(filterText);
+            });
+
+            if (filteredRows.length === 0) {
+                alert("No matching items found for the current search filter.");
+                return;
+            }
+
+            let colsToExport = currentStatExportState.columns;
+            let startColIndex = 0;
+            if (currentStatExportState.categoryKey === 'relationships' && colsToExport[0] === 'summary') {
+                colsToExport = colsToExport.slice(1);
+                startColIndex = 1;
+            }
+
+            downloadTSVFromColumnsAndRows(colsToExport, filteredRows.map(r => r.slice(startColIndex)), `foodtaxa_list_${currentStatExportState.categoryKey}`);
+        }
+
+        // --- EXPORTACIÓN DIRECTA DESDE EL BOTÓN DE LA TARJETA ---
+        function directExportStatCategory(categoryKey, sqlQuery) {
+            if (!db) return;
+            try {
+                const res = db.exec(sqlQuery);
+                if (!res || res.length === 0 || !res[0].values || res[0].values.length === 0) {
+                    alert("No records found to export for " + categoryKey);
+                    return;
+                }
+                downloadTSVFromColumnsAndRows(res[0].columns, res[0].values, `foodtaxa_full_${categoryKey}`);
+            } catch (err) {
+                console.error("Error exporting category directly:", err);
+                alert("Error exporting list: " + err.message);
+            }
+        }
+
+        // --- HELPER GENÉRICO PARA DESCARGAR ARCHIVOS TSV ---
+        function downloadTSVFromColumnsAndRows(columns, rows, filenamePrefix) {
+            const cleanCell = (val) => {
+                if (val === null || val === undefined) return "";
+                return val.toString().replace(/\t/g, " ").replace(/\r?\n/g, " ");
+            };
+
+            const headerLine = columns.map(cleanCell).join("\t");
+            const bodyLines = rows.map(row => row.map(cleanCell).join("\t"));
+            const tsvContent = [headerLine, ...bodyLines].join("\n");
+
+            const blob = new Blob([tsvContent], { type: 'text/tab-separated-values;charset=utf-8;' });
+            const link = document.createElement("a");
+            
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                const timestamp = new Date().toISOString().slice(0,10);
+                link.setAttribute("download", `${filenamePrefix}_${timestamp}.tsv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }
+        }
+
+        // --- CARGA MANUAL DESDE DISPOSITIVO (FALLBACK) ---
+        document.getElementById('db-file-input').addEventListener('change', async function(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            document.getElementById('loading-spinner').classList.remove('hidden');
+            document.getElementById('manual-fallback').classList.add('hidden');
+            
+            try {
+                const SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
+                const reader = new FileReader();
+                
+                reader.onload = function() {
+                    db = new SQL.Database(new Uint8Array(reader.result));
+                    
+                    document.getElementById('db-upload-section').classList.add('hidden');
+                    document.getElementById('main-app-section').classList.remove('hidden');
+                    
+                    document.getElementById('db-status-icon').className = "fas fa-database text-emerald-400";
+                    document.getElementById('db-status-text').textContent = "Database connected";
+
+                    loadStatistics();
+                };
+                reader.readAsArrayBuffer(file);
+            } catch (err) {
+                alert("Error loading the database: " + err.message);
+                document.getElementById('loading-spinner').classList.add('hidden');
+                document.getElementById('manual-fallback').classList.remove('hidden');
+            }
+        });
+
+        // --- RENDERIZADO DE FILTROS LATERALES DINÁMICOS ---
+        function renderSidebarFilters(containerId, countId, itemsList, type, isSecondary) {
+            const container = document.getElementById(containerId);
+            document.getElementById(countId).textContent = itemsList.length;
+
+            if (itemsList.length === 0) {
+                container.innerHTML = `<p class="italic text-slate-400 text-xs">No matching terms.</p>`;
+                return;
+            }
+
+            const classMarker = isSecondary ? `dynamic-${type}-secondary-filter` : `dynamic-${type}-primary-filter`;
+            const containerMarker = isSecondary ? `dynamic-${type}-secondary-container` : `dynamic-${type}-primary-container`;
+            
+            let styleItalic = '';
+            if ((type === 'food' && isSecondary) || 
+                (type === 'bacteria' && !isSecondary) || 
+                (type === 'health_group' && isSecondary) ||
+                (type === 'paper' && isSecondary)) {
+                styleItalic = 'italic';
+            }
+
+            let html = '';
+            itemsList.forEach(item => {
+                html += `
+                    <label class="${containerMarker} flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded cursor-pointer transition select-none" data-text="${item.toLowerCase()}">
+                        <input type="checkbox" value="${item}" checked 
+                               class="rounded text-scientific-blue focus:ring-scientific-light h-4 w-4 ${classMarker}"
+                               onchange="applyCombinedFilters('${type}')">
+                        <span class="truncate font-medium text-slate-700 ${styleItalic}" title="${item}">${item}</span>
+                    </label>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        // --- FILTRAR VISUALMENTE LOS CHECKBOXES O MENÚS ---
+        function filterSidebarOptions(inputElement, elementsClassName) {
+            const searchText = inputElement.value.trim().toLowerCase();
+            const elements = document.querySelectorAll(`.${elementsClassName}`);
+            let visibleCount = 0;
+            
+            elements.forEach(el => {
+                const text = el.getAttribute('data-text');
+                if (text.includes(searchText)) {
+                    el.classList.remove('hidden');
+                    visibleCount++;
+                } else {
+                    el.classList.add('hidden');
+                }
+            });
+
+            if (elementsClassName === 'dynamic-stat-detail-item') {
+                const badge = document.getElementById('stat-detail-count-badge');
+                if (badge) badge.textContent = visibleCount;
+            }
+        }
+
+        // --- MARCAR / DESMARCAR TODOS LOS CHECKBOXES ---
+        function toggleAllCheckboxes(className, checkState, type) {
+            const checkboxes = document.querySelectorAll(`.${className}`);
+            if (checkboxes.length === 0) return;
+            
+            checkboxes.forEach(cb => { cb.checked = checkState; });
+            applyCombinedFilters(type);
+        }
+
+        // --- RETORNA EL CONJUNTO ACTUAL DE DATOS FILTRADOS POR CHECKBOXES ---
+        function getFilteredDataset(type) {
+            const primaryCbs = document.querySelectorAll(`.dynamic-${type}-primary-filter`);
+            const activePrimary = Array.from(primaryCbs).filter(cb => cb.checked).map(cb => cb.value);
+
+            const secondaryCbs = document.querySelectorAll(`.dynamic-${type}-secondary-filter`);
+            const activeSecondary = Array.from(secondaryCbs).filter(cb => cb.checked).map(cb => cb.value);
+
+            if (type === 'food') {
+                return currentFoodResults.filter(row => activePrimary.includes(row.food) && activeSecondary.includes(row.bacteria));
+            } else if (type === 'bacteria') {
+                return currentBacteriaResults.filter(row => activePrimary.includes(row.bacteria) && activeSecondary.includes(row.food));
+            } else if (type === 'health_group') {
+                return currentHealthGroupResults.filter(row => activePrimary.includes(row.health_group) && activeSecondary.includes(row.bacteria));
+            } else if (type === 'paper') {
+                return currentPaperResults.filter(row => activePrimary.includes(row.archivo_origen) && activeSecondary.includes(row.bacteria));
+            }
+            return [];
+        }
+
+        // --- GESTIÓN INTERNA DE ORDENACIÓN EN EL CLIENTE ---
+        function handleSort(section, columnName) {
+            const state = sortState[section];
+            
+            if (state.column === columnName) {
+                state.direction = state.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                state.column = columnName;
+                state.direction = 'asc';
+            }
+
+            updateSortIcons(section);
+            applyCombinedFilters(section);
+        }
+
+        function updateSortIcons(section) {
+            const columns = ['food', 'category', 'bacteria', 'effect', 'context', 'study_type', 'sequencing', 'health_group', 'archivo_origen'];
+            columns.forEach(col => {
+                const el = document.getElementById(`sort-icon-${section}-${col}`);
+                if (el) el.textContent = '';
+            });
+
+            const activeState = sortState[section];
+            if (activeState.column) {
+                const activeEl = document.getElementById(`sort-icon-${section}-${activeState.column}`);
+                if (activeEl) {
+                    activeEl.textContent = activeState.direction === 'asc' ? '▲' : '▼';
+                }
+            }
+        }
+
+        function sortDataset(dataset, section) {
+            const state = sortState[section];
+            if (!state.column) return dataset;
+
+            const col = state.column;
+            const dirMultiplier = state.direction === 'asc' ? 1 : -1;
+
+            return dataset.sort((a, b) => {
+                let valA = a[col] ? a[col].toString().toLowerCase() : '';
+                let valB = b[col] ? b[col].toString().toLowerCase() : '';
+
+                if (valA < valB) return -1 * dirMultiplier;
+                if (valA > valB) return 1 * dirMultiplier;
+                return 0;
+            });
+        }
+
+        // --- APLICACIÓN DE FILTRADO COMBINADO INTERNO + ORDENACIÓN ---
+        function applyCombinedFilters(type) {
+            let filtered = getFilteredDataset(type);
+            filtered = sortDataset(filtered, type);
+
+            if (type === 'food') {
+                renderTableHtml(filtered, 'food-results-body');
+            } else if (type === 'bacteria') {
+                renderTableHtml(filtered, 'bacteria-results-body');
+            } else if (type === 'health_group') {
+                renderTableHtml(filtered, 'health_group-results-body');
+            } else if (type === 'paper') {
+                renderTableHtml(filtered, 'paper-results-body');
+            }
+        }
+
+        function getCategoryBadge(cat) {
+            if (!cat || cat === 'Unclassified') {
+                return '<span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">Unclassified</span>';
+            }
+            switch(cat) {
+                case 'Foods':
+                    return '<span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-xs font-semibold">Foods</span>';
+                case 'Nutrients and metabolites':
+                    return '<span class="bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded text-xs font-semibold">Nutrients & Met.</span>';
+                case 'Diets':
+                    return '<span class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-xs font-semibold">Diets</span>';
+                case 'Plants and subproducts':
+                    return '<span class="bg-lime-100 text-lime-800 px-2 py-0.5 rounded text-xs font-semibold">Plants</span>';
+                case 'Probiotics and fermented products':
+                    return '<span class="bg-purple-100 text-purple-800 px-2 py-0.5 rounded text-xs font-semibold">Probiotics</span>';
+                default:
+                    return `<span class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs">${cat}</span>`;
+            }
+        }
+
+        function renderTableHtml(dataArray, tbodyId) {
+            let html = '';
+            dataArray.forEach(row => {
+                const badgeColor = row.effect === 'increase' ? 'bg-blue-100 text-blue-800' : 
+                                   row.effect === 'decrease' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-800';
+                
+                const healthGroupText = row.health_group && row.health_group !== 'General/Unspecified' ? 
+                                        row.health_group : 'General/Unspecified';
+
+                let colsHtml = '';
+                const cleanBacteriaName = row.bacteria.replace(/'/g, "\\'");
+
+                if (tbodyId === 'health_group-results-body') {
+                    colsHtml = `
+                        <td class="py-3 px-6 font-bold text-rose-600">${healthGroupText}</td>
+                        <td class="py-3 px-6 font-medium text-slate-700">${row.food}</td>
+                        <td class="py-3 px-6 font-bold italic text-scientific-blue"><button onclick="showBacteriaDetails('${cleanBacteriaName}')" class="hover:text-scientific-light hover:underline text-left transition">${row.bacteria}</button></td>
+                        <td class="py-3 px-6"><span class="${badgeColor} px-2 py-1 rounded text-xs font-bold uppercase">${row.effect || 'N/A'}</span></td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.context || ''} ${row.magnitude ? '('+row.magnitude+')' : ''}</td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.study_type || 'N/A'}</td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.sequencing || 'N/A'}</td>
+                        <td class="py-3 px-6 text-sm text-slate-500 text-center"><button onclick="showPaperDetails('${row.archivo_origen}')" class="text-scientific-light hover:underline font-medium hover:text-scientific-blue transition"><i class="fas fa-file-pdf mr-1"></i> ${row.archivo_origen}</button></td>
+                    `;
+                } else if (tbodyId === 'paper-results-body') {
+                    colsHtml = `
+                        <td class="py-3 px-6 font-bold text-slate-800"><button onclick="showPaperDetails('${row.archivo_origen}')" class="text-scientific-blue hover:text-scientific-light hover:underline text-left transition"><i class="fas fa-file-alt mr-1 text-slate-400"></i> ${row.archivo_origen}</button></td>
+                        <td class="py-3 px-6 font-medium text-slate-700">${row.food}</td>
+                        <td class="py-3 px-6 font-bold italic text-scientific-blue"><button onclick="showBacteriaDetails('${cleanBacteriaName}')" class="hover:text-scientific-light hover:underline text-left transition">${row.bacteria}</button></td>
+                        <td class="py-3 px-6"><span class="${badgeColor} px-2 py-1 rounded text-xs font-bold uppercase">${row.effect || 'N/A'}</span></td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.context || ''} ${row.magnitude ? '('+row.magnitude+')' : ''}</td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.study_type || 'N/A'}</td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.sequencing || 'N/A'}</td>
+                        <td class="py-3 px-6 text-sm font-medium text-emerald-600">${healthGroupText}</td>
+                    `;
+                } else {
+                    colsHtml = `
+                        <td class="py-3 px-6 font-bold text-slate-700">${row.food}</td>
+                        <td class="py-3 px-6">${getCategoryBadge(row.category)}</td>
+                        <td class="py-3 px-6 font-bold italic text-scientific-blue"><button onclick="showBacteriaDetails('${cleanBacteriaName}')" class="hover:text-scientific-light hover:underline text-left transition">${row.bacteria}</button></td>
+                        <td class="py-3 px-6"><span class="${badgeColor} px-2 py-1 rounded text-xs font-bold uppercase">${row.effect || 'N/A'}</span></td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.context || ''} ${row.magnitude ? '('+row.magnitude+')' : ''}</td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.study_type || 'N/A'}</td>
+                        <td class="py-3 px-6 text-sm text-slate-600">${row.sequencing || 'N/A'}</td>
+                        <td class="py-3 px-6 text-sm font-medium text-emerald-600">${healthGroupText}</td>
+                        <td class="py-3 px-6 text-sm text-slate-500 text-center"><button onclick="showPaperDetails('${row.archivo_origen}')" class="text-scientific-light hover:underline font-medium hover:text-scientific-blue transition"><i class="fas fa-file-pdf mr-1"></i> ${row.archivo_origen}</button></td>
+                    `;
+                }
+
+                html += `<tr class="hover:bg-slate-50 transition fade-in">${colsHtml}</tr>`;
+            });
+            const colSpanCount = (tbodyId === 'food-results-body' || tbodyId === 'bacteria-results-body') ? 9 : 8;
+            document.getElementById(tbodyId).innerHTML = html || `<tr><td colspan="${colSpanCount}" class="text-center py-8 text-slate-500">No rows match the active filter criteria.</td></tr>`;
+        }
+
+        // --- EXPORTAR A TSV ---
+        function exportToTSV(type) {
+            let activeData = getFilteredDataset(type);
+            activeData = sortDataset(activeData, type);
+
+            if (!activeData || activeData.length === 0) {
+                alert("There are no rows or active filters selected to export.");
+                return;
+            }
+
+            let headers = [];
+            if (type === 'paper') {
+                headers = ["paper", "food", "bacteria", "effect", "context", "study_type", "sequencing", "health_group"];
+            } else if (type === 'health_group') {
+                headers = ["health_group", "food", "bacteria", "effect", "context", "study_type", "sequencing", "paper"];
+            } else {
+                headers = ["food", "category", "bacteria", "effect", "context", "study_type", "sequencing", "health_group", "paper"];
+            }
+            
+            const rows = activeData.map(row => {
+                if (type === 'paper') {
+                    return [row.archivo_origen, row.food, row.bacteria, row.effect || "N/A", row.context || "", row.study_type || "N/A", row.sequencing || "N/A", row.health_group || "General"];
+                } else if (type === 'health_group') {
+                    return [row.health_group || "General", row.food, row.bacteria, row.effect || "N/A", row.context || "", row.study_type || "N/A", row.sequencing || "N/A", row.archivo_origen];
+                } else {
+                    return [row.food, row.category || "Unclassified", row.bacteria, row.effect || "N/A", row.context || "", row.study_type || "N/A", row.sequencing || "N/A", row.health_group || "General", row.archivo_origen];
+                }
+            });
+
+            downloadTSVFromColumnsAndRows(headers, rows, `foodtaxa_selection_${type}`);
+        }
+
+        // ================= CONSULTAS SQL PRINCIPALES =================
+
+        function searchByFood() {
+            const input = document.getElementById('food-search-input').value.trim();
+            if (!db) return;
+
+            const effectFilter = document.getElementById('food-effect-filter').value;
+            const categoryFilter = document.getElementById('food-category-filter').value;
+
+            let conditions = ["f.name LIKE $searchTerm"];
+            let bindParams = { $searchTerm: `%${input}%` };
+
+            if (effectFilter !== "ALL") {
+                conditions.push("fbe.effect = $effectTerm");
+                bindParams['$effectTerm'] = effectFilter;
+            }
+            if (categoryFilter !== "ALL") {
+                conditions.push("f.category = $categoryTerm");
+                bindParams['$categoryTerm'] = categoryFilter;
+            }
+
+            const whereClause = conditions.join(" AND ");
+
+            const query = `
+                SELECT f.name AS food, COALESCE(f.category, 'Unclassified') AS category, b.name AS bacteria, fbe.effect, fbe.magnitude, fbe.context, fbe.study_type, fbe.sequencing, hg.name AS health_group, p.archivo_origen
+                FROM foods f
+                JOIN food_bacteria_effects fbe ON f.id = fbe.food_id
+                JOIN bacteria b ON fbe.bacteria_id = b.id
+                JOIN papers p ON fbe.paper_id = p.id
+                LEFT JOIN health_groups hg ON fbe.health_group_id = hg.id
+                WHERE ${whereClause}
+                ORDER BY f.name ASC, b.name ASC;
+            `;
+
+            try {
+                const stmt = db.prepare(query);
+                stmt.bind(bindParams); 
+                currentFoodResults = [];
+                let foodsSet = new Set();
+                let bacteriaSet = new Set();
+
+                while(stmt.step()) {
+                    const row = stmt.getAsObject();
+                    row.health_group = row.health_group || 'General/Unspecified';
+                    currentFoodResults.push(row);
+                    foodsSet.add(row.food);
+                    bacteriaSet.add(row.bacteria);
+                }
+                stmt.free();
+
+                sortState.food = { column: null, direction: 'asc' };
+                updateSortIcons('food');
+                document.querySelectorAll('#section-food input[placeholder="Filter options..."]').forEach(i => i.value = '');
+
+                renderSidebarFilters('food-checkbox-container', 'food-aside-count', Array.from(foodsSet).sort(), 'food', false);
+                renderSidebarFilters('food-bacteria-checkbox-container', 'food-bacteria-aside-count', Array.from(bacteriaSet).sort(), 'food', true);
+                renderTableHtml(currentFoodResults, 'food-results-body');
+            } catch (e) { console.error("SQL Error:", e); }
+        }
+
+        function searchByBacteria() {
+            const input = document.getElementById('bacteria-search-input').value.trim();
+            if (!db) return;
+
+            const effectFilter = document.getElementById('bacteria-effect-filter').value;
+            const categoryFilter = document.getElementById('bacteria-category-filter').value;
+
+            let conditions = ["b.name LIKE $searchTerm"];
+            let bindParams = { $searchTerm: `%${input}%` };
+
+            if (effectFilter !== "ALL") {
+                conditions.push("fbe.effect = $effectTerm");
+                bindParams['$effectTerm'] = effectFilter;
+            }
+            if (categoryFilter !== "ALL") {
+                conditions.push("f.category = $categoryTerm");
+                bindParams['$categoryTerm'] = categoryFilter;
+            }
+
+            const whereClause = conditions.join(" AND ");
+
+            const query = `
+                SELECT b.name AS bacteria, f.name AS food, COALESCE(f.category, 'Unclassified') AS category, fbe.effect, fbe.magnitude, fbe.context, fbe.study_type, fbe.sequencing, hg.name AS health_group, p.archivo_origen
+                FROM bacteria b
+                JOIN food_bacteria_effects fbe ON b.id = fbe.bacteria_id
+                JOIN foods f ON fbe.food_id = f.id
+                JOIN papers p ON fbe.paper_id = p.id
+                LEFT JOIN health_groups hg ON fbe.health_group_id = hg.id
+                WHERE ${whereClause}
+                ORDER BY b.name ASC, f.name ASC;
+            `;
+
+            try {
+                const stmt = db.prepare(query);
+                stmt.bind(bindParams);
+                currentBacteriaResults = [];
+                let bacteriaSet = new Set();
+                let foodsSet = new Set();
+
+                while(stmt.step()) {
+                    const row = stmt.getAsObject();
+                    row.health_group = row.health_group || 'General/Unspecified';
+                    currentBacteriaResults.push(row);
+                    bacteriaSet.add(row.bacteria);
+                    foodsSet.add(row.food);
+                }
+                stmt.free();
+
+                sortState.bacteria = { column: null, direction: 'asc' };
+                updateSortIcons('bacteria');
+                document.querySelectorAll('#section-bacteria input[placeholder="Filter options..."]').forEach(i => i.value = '');
+
+                renderSidebarFilters('bacteria-checkbox-container', 'bacteria-aside-count', Array.from(bacteriaSet).sort(), 'bacteria', false);
+                renderSidebarFilters('bacteria-foods-checkbox-container', 'bacteria-foods-aside-count', Array.from(foodsSet).sort(), 'bacteria', true);
+                renderTableHtml(currentBacteriaResults, 'bacteria-results-body');
+            } catch (e) { console.error("SQL Error:", e); }
+        }
+
+        function searchByHealthGroup() {
+            const input = document.getElementById('health_group-search-input').value.trim();
+            if (!db) return;
+
+            const effectFilter = document.getElementById('health_group-effect-filter').value;
+            let effectCondition = effectFilter !== "ALL" ? "AND fbe.effect = $effectTerm" : "";
+
+            const query = `
+                SELECT hg.name AS health_group, f.name AS food, b.name AS bacteria, fbe.effect, fbe.magnitude, fbe.context, fbe.study_type, fbe.sequencing, p.archivo_origen
+                FROM health_groups hg
+                JOIN food_bacteria_effects fbe ON hg.id = fbe.health_group_id
+                JOIN foods f ON fbe.food_id = f.id
+                JOIN bacteria b ON fbe.bacteria_id = b.id
+                JOIN papers p ON fbe.paper_id = p.id
+                WHERE hg.name LIKE $searchTerm ${effectCondition}
+                ORDER BY hg.name ASC, f.name ASC;
+            `;
+
+            try {
+                const stmt = db.prepare(query);
+                let bindParams = { $searchTerm: `%${input}%` };
+                if (effectFilter !== "ALL") bindParams['$effectTerm'] = effectFilter;
+                
+                stmt.bind(bindParams);
+                currentHealthGroupResults = [];
+                let healthGroupSet = new Set();
+                let bacteriaSet = new Set();
+
+                while(stmt.step()) {
+                    const row = stmt.getAsObject();
+                    row.health_group = row.health_group || 'General/Unspecified';
+                    currentHealthGroupResults.push(row);
+                    healthGroupSet.add(row.health_group);
+                    bacteriaSet.add(row.bacteria);
+                }
+                stmt.free();
+
+                sortState.health_group = { column: null, direction: 'asc' };
+                updateSortIcons('health_group');
+                document.querySelectorAll('#section-health_group input[placeholder="Filter options..."]').forEach(i => i.value = '');
+
+                renderSidebarFilters('health_group-checkbox-container', 'health_group-aside-count', Array.from(healthGroupSet).sort(), 'health_group', false);
+                renderSidebarFilters('health_group-bacteria-checkbox-container', 'health_group-bacteria-aside-count', Array.from(bacteriaSet).sort(), 'health_group', true);
+                renderTableHtml(currentHealthGroupResults, 'health_group-results-body');
+            } catch (e) { console.error("SQL Error:", e); }
+        }
+
+        function searchByPaper() {
+            const input = document.getElementById('paper-search-input').value.trim();
+            if (!db) return;
+
+            const effectFilter = document.getElementById('paper-effect-filter').value;
+            let effectCondition = effectFilter !== "ALL" ? "AND fbe.effect = $effectTerm" : "";
+
+            const query = `
+                SELECT p.archivo_origen, f.name AS food, b.name AS bacteria, fbe.effect, fbe.magnitude, fbe.context, fbe.study_type, fbe.sequencing, hg.name AS health_group
+                FROM papers p
+                JOIN food_bacteria_effects fbe ON p.id = fbe.paper_id
+                JOIN foods f ON fbe.food_id = f.id
+                JOIN bacteria b ON fbe.bacteria_id = b.id
+                LEFT JOIN health_groups hg ON fbe.health_group_id = hg.id
+                WHERE p.archivo_origen LIKE $searchTerm ${effectCondition}
+                ORDER BY p.archivo_origen ASC, f.name ASC;
+            `;
+
+            try {
+                const stmt = db.prepare(query);
+                let bindParams = { $searchTerm: `%${input}%` };
+                if (effectFilter !== "ALL") bindParams['$effectTerm'] = effectFilter;
+                
+                stmt.bind(bindParams);
+                currentPaperResults = [];
+                let paperSet = new Set();
+                let bacteriaSet = new Set();
+
+                while(stmt.step()) {
+                    const row = stmt.getAsObject();
+                    row.health_group = row.health_group || 'General/Unspecified';
+                    currentPaperResults.push(row);
+                    paperSet.add(row.archivo_origen);
+                    bacteriaSet.add(row.bacteria);
+                }
+                stmt.free();
+
+                sortState.paper = { column: null, direction: 'asc' };
+                updateSortIcons('paper');
+                document.querySelectorAll('#section-paper input[placeholder="Filter options..."]').forEach(i => i.value = '');
+
+                renderSidebarFilters('paper-checkbox-container', 'paper-aside-count', Array.from(paperSet).sort(), 'paper', false);
+                renderSidebarFilters('paper-bacteria-checkbox-container', 'paper-bacteria-aside-count', Array.from(bacteriaSet).sort(), 'paper', true);
+                renderTableHtml(currentPaperResults, 'paper-results-body');
+            } catch (e) { console.error("SQL Error:", e); }
+        }
+
+        document.getElementById('food-search-input').addEventListener('keypress', function (e) { if (e.key === 'Enter') searchByFood(); });
+        document.getElementById('bacteria-search-input').addEventListener('keypress', function (e) { if (e.key === 'Enter') searchByBacteria(); });
+        document.getElementById('health_group-search-input').addEventListener('keypress', function (e) { if (e.key === 'Enter') searchByHealthGroup(); });
+        document.getElementById('paper-search-input').addEventListener('keypress', function (e) { if (e.key === 'Enter') searchByPaper(); });
+
+        document.getElementById('food-category-filter').addEventListener('change', searchByFood);
+        document.getElementById('bacteria-category-filter').addEventListener('change', searchByBacteria);
+    </script>
+</body>
+</html>
